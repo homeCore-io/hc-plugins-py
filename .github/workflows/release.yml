@@ -1,0 +1,56 @@
+# Tag `hc-<name>-v<version>` to release one plugin.
+#
+# Everything real lives in hc-scripts: the build produces a hermetic artifact —
+# the plugin, the SDK and every dependency as wheels — and the release gate
+# installs it offline into a clean venv and waits for it to register with a
+# broker before anything is published. "It compiled" does not exist as a signal
+# for a Python plugin, so a well-formed tarball is not evidence of anything.
+name: Release
+
+on:
+  push:
+    tags: ['hc-*-v*']
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: 'Plugin to build, e.g. hc-virtuallight'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # A tag names a plugin and a version together; the build needs the directory.
+  # Expressions cannot strip the `-v<version>` suffix, so it happens here rather
+  # than being format()'d wrong — `plugins/hc-foo-v0.2.1` is not a directory.
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      plugin_dir: ${{ steps.pick.outputs.plugin_dir }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: pick
+        env:
+          MANUAL: ${{ inputs.plugin }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MANUAL:-}" ]; then
+            name="$MANUAL"
+          else
+            name="${REF%-v*}"
+          fi
+          dir="plugins/$name"
+          if [ ! -f "$dir/pyproject.toml" ]; then
+            echo "::error::$dir has no pyproject.toml — tag `hc-<name>-v<version>` where <name> matches a directory under plugins/"
+            exit 1
+          fi
+          echo "plugin_dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "Releasing $dir"
+
+  release:
+    needs: resolve
+    uses: homeCore-io/hc-scripts/.github/workflows/python-release.yml@main
+    with:
+      plugin_dir: ${{ needs.resolve.outputs.plugin_dir }}
+    secrets: inherit

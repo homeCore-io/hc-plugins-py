@@ -1,0 +1,55 @@
+# Lint and test every plugin in the repo.
+#
+# Matched to the interpreter the artifacts are built for, so a plugin that
+# depends on something newer fails here rather than at install time on an
+# operator's runtime.
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  # Filters the branch a PR merges *into*, not the one it comes from, so this
+  # covers every PR from every branch.
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Check out the SDK
+        uses: actions/checkout@v7
+        with:
+          repository: homeCore-io/hc-plugin-sdk-py
+          path: .sdk
+
+      # The SDK is published to no index, deliberately, so it is installed from
+      # the checkout rather than downloaded — the same thing the artifact build
+      # does, for the same reason.
+      - name: Test each plugin
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for dir in plugins/*/; do
+            [ -f "$dir/pyproject.toml" ] || continue
+            found=1
+            echo "── $dir ───────────────────────────────────────────"
+            uv venv --python 3.12 --seed --quiet ".venv-$(basename "$dir")"
+            py=".venv-$(basename "$dir")/bin/python"
+            "$py" -m pip install -q ./.sdk "$dir" pytest
+            if [ -d "$dir/tests" ]; then
+              "$py" -m pytest -q "$dir/tests"
+            else
+              echo "::warning::$dir has no tests/"
+            fi
+            # Importable is the floor: a plugin that cannot be imported cannot
+            # be launched, and that failure is cheaper here than on a runtime.
+            "$py" -c "import tomllib,sys; m=tomllib.load(open('$dir/pyproject.toml','rb'))['tool']['homecore']; __import__(m['entrypoint'])"
+          done
+          if [ "$found" = 0 ]; then
+            echo "No plugins yet — nothing to test."
+          fi
